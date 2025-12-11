@@ -12,8 +12,6 @@ st.set_page_config(layout="wide", page_title="TradeView Pro")
 st.markdown("""
 <style>
     .stApp { background-color: #0a192f; }
-    
-    /* Metrics Styling */
     div[data-testid="stMetric"] {
         background-color: #112240;
         padding: 15px;
@@ -23,30 +21,13 @@ st.markdown("""
     }
     div[data-testid="stMetricLabel"] { color: #8892b0 !important; }
     div[data-testid="stMetricValue"] { color: #e6f1ff !important; font-family: 'monospace'; }
-    
-    /* Sidebar */
     section[data-testid="stSidebar"] { background-color: #112240; }
     .stTextInput>div>div>input { color: #e6f1ff; }
-    
-    /* Tabs */
-    button[data-baseweb="tab"] {
-        background-color: transparent !important;
-        color: #8892b0 !important;
-        font-weight: 600;
-    }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        color: #64ffda !important;
-        border-bottom: 2px solid #64ffda !important;
-    }
-    
-    /* Disclaimer & Info Box */
+    button[data-baseweb="tab"] { background-color: transparent !important; color: #8892b0 !important; font-weight: 600; }
+    button[data-baseweb="tab"][aria-selected="true"] { color: #64ffda !important; border-bottom: 2px solid #64ffda !important; }
     .disclaimer {
         font-size: 0.85rem; color: #8892b0; background-color: #1e2329; 
         padding: 15px; border-radius: 5px; border-left: 4px solid #ff5f5f; margin-top: 20px;
-    }
-    .info-box {
-        background-color: #112240; border-radius: 5px; padding: 10px; 
-        border-left: 4px solid #64ffda; font-size: 0.9rem; color: #e6f1ff;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -147,16 +128,22 @@ if df1 is not None and not df1.empty:
             fig.update_layout(title=f"{ticker} Price History", yaxis_title="USD", template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- ANALYST INSIGHT (SMA) ---
+            # --- SAFE ANALYST INSIGHT ---
             with st.expander("💡 Analyst Insight: Trend Analysis", expanded=True):
                 sma_val = df1['SMA_50'].iloc[-1]
-                trend = "BULLISH (Upward)" if curr_price > sma_val else "BEARISH (Downward)"
-                color = "green" if curr_price > sma_val else "red"
-                st.markdown(f"""
-                The current price (**${curr_price:.2f}**) is trading **:{color}[{trend}]** relative to its 50-Day Moving Average (**${sma_val:.2f}**).
-                * Generally, trading above the SMA-50 suggests short-to-medium term strength.
-                * Trading below suggests potential weakness or a downtrend.
-                """)
+                
+                # Check for NaN (Not a Number) to prevent crash
+                if pd.isna(sma_val):
+                    st.warning("⚠️ Not enough data points to calculate the 50-Day Moving Average trend.")
+                else:
+                    sma_val = float(sma_val)
+                    trend = "BULLISH (Upward)" if curr_price > sma_val else "BEARISH (Downward)"
+                    color = "green" if curr_price > sma_val else "red"
+                    st.markdown(f"""
+                    The current price (**${curr_price:.2f}**) is trading **:{color}[{trend}]** relative to its 50-Day Moving Average (**${sma_val:.2f}**).
+                    * Generally, trading above the SMA-50 suggests short-to-medium term strength.
+                    * Trading below suggests potential weakness or a downtrend.
+                    """)
 
         # TAB 2: TECHNICALS
         with tab2:
@@ -176,9 +163,7 @@ if df1 is not None and not df1.empty:
                 rfig.update_layout(title="RSI (Momentum)", template="plotly_dark", height=400, yaxis_range=[0,100], paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(rfig, use_container_width=True)
 
-            # --- ANALYST INSIGHT (RSI) ---
             with st.expander("💡 Analyst Insight: Momentum & Volatility", expanded=True):
-                # RSI Logic
                 if rsi_val > 70:
                     rsi_msg = "⚠️ **Overbought (>70):** The asset may be overvalued and due for a correction."
                 elif rsi_val < 30:
@@ -186,13 +171,11 @@ if df1 is not None and not df1.empty:
                 else:
                     rsi_msg = "ℹ️ **Neutral (30-70):** The asset is in a healthy trading range."
                 
-                # Volatility Logic
                 vol_msg = "High Risk/Reward" if volatility > 30 else "Stable/Low Volatility"
-                
                 st.markdown(f"""
                 **Relative Strength Index (RSI):** {rsi_msg}
                 <br>
-                **Annualized Volatility:** **{volatility:.2f}%** ({vol_msg}). Higher volatility implies larger price swings.
+                **Annualized Volatility:** **{volatility:.2f}%** ({vol_msg}).
                 """, unsafe_allow_html=True)
 
         # TAB 3: COMPARISON
@@ -207,7 +190,6 @@ if df1 is not None and not df1.empty:
                 comp_fig.update_layout(title=f"Cumulative Return (%)", yaxis_title="Return (%)", template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(comp_fig, use_container_width=True)
                 
-                # Correlation
                 common = df1.index.intersection(df2.index)
                 corr = df1['Close'][common].corr(df2['Close'][common])
                 
@@ -217,7 +199,6 @@ if df1 is not None and not df1.empty:
                     **Correlation Coefficient: {corr:.2f}** ({corr_strength})
                     * **1.0:** Assets move perfectly together.
                     * **0.0:** Assets are unrelated.
-                    * **-1.0:** Assets move in opposite directions (Hedge).
                     """)
             else:
                 st.info("Enter a comparison ticker in the sidebar.")
@@ -243,15 +224,12 @@ if df1 is not None and not df1.empty:
             ffig.update_layout(template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(ffig, use_container_width=True)
             
-            # Trend Logic
             slope = z[0]
             trend_msg = "UPWARD 📈" if slope > 0 else "DOWNWARD 📉"
-            
             with st.expander("💡 Analyst Insight: Predictive Model", expanded=True):
                 st.markdown(f"""
-                Based on a Linear Regression analysis of the selected timeframe, the mathematical trend is **{trend_msg}**.
+                Based on a Linear Regression analysis, the trend is **{trend_msg}**.
                 * **Model Slope:** {slope:.4f} (Daily price change average)
-                * **Projection:** The red dotted line represents the statistical trajectory if current market conditions persist.
                 """)
 
     except Exception as e:
