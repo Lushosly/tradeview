@@ -14,10 +14,8 @@ st.markdown("""
     .stApp { background-color: #0a192f; }
     div[data-testid="stMetric"] {
         background-color: #112240;
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #233554;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        padding: 15px; border-radius: 10px;
+        border: 1px solid #233554; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
     div[data-testid="stMetricLabel"] { color: #8892b0 !important; }
     div[data-testid="stMetricValue"] { color: #e6f1ff !important; font-family: 'monospace'; }
@@ -41,210 +39,212 @@ st.sidebar.header("⚙️ Timeframe")
 timeframe_options = ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "Max"]
 selected_tf = st.sidebar.selectbox("Range", timeframe_options, index=4)
 
-# === TIME LOGIC ===
-def get_date_range(tf):
-    today = datetime.today()
-    if tf == "1M": return today - timedelta(days=30)
-    if tf == "3M": return today - timedelta(days=90)
-    if tf == "6M": return today - timedelta(days=180)
-    if tf == "YTD": return datetime(today.year, 1, 1)
-    if tf == "1Y": return today - timedelta(days=365)
-    if tf == "3Y": return today - timedelta(days=365*3)
-    if tf == "5Y": return today - timedelta(days=365*5)
-    if tf == "Max": return datetime(1900, 1, 1)
-    return today - timedelta(days=365)
+if st.sidebar.button("🔄 Clear Cache & Reload"):
+    st.cache_data.clear()
 
-start_date = get_date_range(selected_tf)
+# === SMART DATA ENGINE ===
+@st.cache_data(ttl=3600)
+def get_data(symbol, tf_label):
+    try:
+        # 1. Calculate Dates
+        end_date = datetime.today()
+        if tf_label == "1M": view_start = end_date - timedelta(days=30)
+        elif tf_label == "3M": view_start = end_date - timedelta(days=90)
+        elif tf_label == "6M": view_start = end_date - timedelta(days=180)
+        elif tf_label == "YTD": view_start = datetime(end_date.year, 1, 1)
+        elif tf_label == "1Y": view_start = end_date - timedelta(days=365)
+        elif tf_label == "3Y": view_start = end_date - timedelta(days=365*3)
+        elif tf_label == "5Y": view_start = end_date - timedelta(days=365*5)
+        else: view_start = datetime(1980, 1, 1)
 
+        # Buffer for SMA-200
+        math_start = view_start - timedelta(days=300)
+        
+        # 2. Fetch Data
+        stock = yf.Ticker(symbol)
+        df = stock.history(start=math_start, end=end_date)
+        
+        if df.empty: return None, None
+
+        # 3. CRITICAL FIX: Flatten MultiIndex Columns
+        # This fixes the NaN errors by ensuring columns are just 'Close', not ('Close', 'BPOP')
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df.index = df.index.tz_localize(None)
+        return df, view_start
+    except:
+        return None, None
+
+def calculate_metrics(df):
+    if len(df) < 2: return df
+    
+    # Moving Averages
+    df['SMA_50'] = df['Close'].rolling(window=50).mean()
+    df['SMA_200'] = df['Close'].rolling(window=200).mean()
+    
+    # Bollinger Bands
+    sma20 = df['Close'].rolling(window=20).mean()
+    std = df['Close'].rolling(window=20).std()
+    df['BB_Upper'] = sma20 + (std * 2)
+    df['BB_Lower'] = sma20 - (std * 2)
+    
+    # RSI
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    return df
+
+# === APP LOGIC ===
 if comp_ticker:
     st.title(f"📈 TradeView: {ticker} vs {comp_ticker}")
 else:
     st.title(f"📈 TradeView: {ticker}")
 
-# === DATA ENGINE ===
-@st.cache_data(ttl=3600)
-def get_data(symbol, start):
+raw_df1, view_start1 = get_data(ticker, selected_tf)
+raw_df2, _ = get_data(comp_ticker, selected_tf) if comp_ticker else (None, None)
+
+if raw_df1 is not None and not raw_df1.empty:
     try:
-        stock = yf.Ticker(symbol)
-        df = stock.history(start=start, end=datetime.today())
-        if df.empty: return None
-        df.index = df.index.tz_localize(None)
-        return df
-    except:
-        return None
-
-# === FINANCIAL LOGIC ===
-def calculate_rsi(data, window=14):
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_bollinger(data, window=20):
-    sma = data['Close'].rolling(window=window).mean()
-    std = data['Close'].rolling(window=window).std()
-    upper = sma + (std * 2)
-    lower = sma - (std * 2)
-    return upper, lower
-
-df1 = get_data(ticker, start_date)
-df2 = get_data(comp_ticker, start_date) if comp_ticker else None
-
-if df1 is not None and not df1.empty:
-    try:
-        # Indicators
-        df1['SMA_50'] = df1['Close'].rolling(window=50).mean()
-        df1['RSI'] = calculate_rsi(df1)
-        df1['BB_Upper'], df1['BB_Lower'] = calculate_bollinger(df1)
+        df1 = calculate_metrics(raw_df1)
+        # Filter for view AFTER calculation
+        view_df1 = df1[df1.index >= view_start1].copy()
+        
+        if view_df1.empty:
+            st.warning("Data loaded, but timeframe is empty. Try a longer range.")
+            st.stop()
 
         # Metrics
-        curr_price = float(df1['Close'].iloc[-1])
-        delta = float(curr_price - df1['Close'].iloc[-2])
-        pct_change = df1['Close'].pct_change()
-        volatility = float(pct_change.std() * 100 * (252**0.5)) if len(df1) > 1 else 0.0
+        curr_price = float(view_df1['Close'].iloc[-1])
+        prev_price = float(view_df1['Close'].iloc[-2])
+        delta = float(curr_price - prev_price)
+        pct_change = view_df1['Close'].pct_change()
+        volatility = float(pct_change.std() * 100 * (252**0.5)) if len(view_df1) > 1 else 0.0
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric(f"{ticker} Price", f"${curr_price:.2f}", f"{delta:.2f}")
         c2.metric("Volatility", f"{volatility:.2f}%")
-        rsi_val = float(df1['RSI'].iloc[-1]) if len(df1) > 14 else 50.0
-        c3.metric("RSI (14-Day)", f"{rsi_val:.1f}")
         
-        if df2 is not None:
-            comp_price = float(df2['Close'].iloc[-1])
-            comp_delta = float(comp_price - df2['Close'].iloc[-2])
-            c4.metric(f"{comp_ticker} Price", f"${comp_price:.2f}", f"{comp_delta:.2f}")
+        # Safe RSI Display
+        last_rsi = df1['RSI'].iloc[-1]
+        rsi_txt = f"{last_rsi:.1f}" if pd.notnull(last_rsi) else "N/A"
+        c3.metric("RSI (14-Day)", rsi_txt)
+        
+        if raw_df2 is not None:
+            c4.metric(f"{comp_ticker} Price", f"${float(raw_df2['Close'].iloc[-1]):.2f}")
         else:
-            c4.metric("Volume", f"{int(df1['Volume'].iloc[-1]):,}")
+            c4.metric("Volume", f"{int(view_df1['Volume'].iloc[-1]):,}")
 
-        # === TABS ===
+        # Tabs
         tab1, tab2, tab3, tab4 = st.tabs(["📉 Price Action", "📊 Technicals", "⚔️ Comparison", "🤖 AI Forecast"])
 
-        # TAB 1: PRICE ACTION
+        # TAB 1
         with tab1:
             fig = go.Figure()
-            fig.add_trace(go.Candlestick(x=df1.index, open=df1['Open'], high=df1['High'], low=df1['Low'], close=df1['Close'], name='Price'))
-            fig.add_trace(go.Scatter(x=df1.index, y=df1['SMA_50'], line=dict(color='#64ffda', width=1), name='SMA 50'))
+            fig.add_trace(go.Candlestick(x=view_df1.index, open=view_df1['Open'], high=view_df1['High'], low=view_df1['Low'], close=view_df1['Close'], name='Price'))
+            if not view_df1['SMA_50'].isna().all():
+                fig.add_trace(go.Scatter(x=view_df1.index, y=view_df1['SMA_50'], line=dict(color='#64ffda', width=1), name='SMA 50'))
             fig.update_layout(title=f"{ticker} Price History", yaxis_title="USD", template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- SAFE ANALYST INSIGHT ---
             with st.expander("💡 Analyst Insight: Trend Analysis", expanded=True):
                 sma_val = df1['SMA_50'].iloc[-1]
-                
-                # Check for NaN (Not a Number) to prevent crash
                 if pd.isna(sma_val):
-                    st.warning("⚠️ Not enough data points to calculate the 50-Day Moving Average trend.")
+                    st.info("⚠️ Calculating Trend... (Insufficient history for 50-Day SMA)")
                 else:
                     sma_val = float(sma_val)
                     trend = "BULLISH (Upward)" if curr_price > sma_val else "BEARISH (Downward)"
                     color = "green" if curr_price > sma_val else "red"
-                    st.markdown(f"""
-                    The current price (**${curr_price:.2f}**) is trading **:{color}[{trend}]** relative to its 50-Day Moving Average (**${sma_val:.2f}**).
-                    * Generally, trading above the SMA-50 suggests short-to-medium term strength.
-                    * Trading below suggests potential weakness or a downtrend.
-                    """)
+                    st.markdown(f"Current price is trading **:{color}[{trend}]** relative to the 50-Day Moving Average (**${sma_val:.2f}**).")
 
-        # TAB 2: TECHNICALS
+        # TAB 2
         with tab2:
             col_t1, col_t2 = st.columns(2)
             with col_t1:
                 bfig = go.Figure()
-                bfig.add_trace(go.Scatter(x=df1.index, y=df1['Close'], line=dict(color='#e6f1ff', width=1), name='Price'))
-                bfig.add_trace(go.Scatter(x=df1.index, y=df1['BB_Upper'], line=dict(color='rgba(100, 255, 218, 0.5)', width=1), name='Upper'))
-                bfig.add_trace(go.Scatter(x=df1.index, y=df1['BB_Lower'], line=dict(color='rgba(100, 255, 218, 0.5)', width=1), name='Lower', fill='tonexty'))
+                bfig.add_trace(go.Scatter(x=view_df1.index, y=view_df1['Close'], line=dict(color='#e6f1ff', width=1), name='Price'))
+                bfig.add_trace(go.Scatter(x=view_df1.index, y=view_df1['BB_Upper'], line=dict(color='rgba(100, 255, 218, 0.5)', width=1), name='Upper'))
+                bfig.add_trace(go.Scatter(x=view_df1.index, y=view_df1['BB_Lower'], line=dict(color='rgba(100, 255, 218, 0.5)', width=1), name='Lower', fill='tonexty'))
                 bfig.update_layout(title="Bollinger Bands", template="plotly_dark", height=400, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(bfig, use_container_width=True)
             with col_t2:
                 rfig = go.Figure()
-                rfig.add_trace(go.Scatter(x=df1.index, y=df1['RSI'], line=dict(color='#fee440', width=2), name='RSI'))
+                rfig.add_trace(go.Scatter(x=view_df1.index, y=view_df1['RSI'], line=dict(color='#fee440', width=2), name='RSI'))
                 rfig.add_hline(y=70, line_dash="dash", line_color="red")
                 rfig.add_hline(y=30, line_dash="dash", line_color="green")
-                rfig.update_layout(title="RSI (Momentum)", template="plotly_dark", height=400, yaxis_range=[0,100], paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                rfig.update_layout(title="RSI", template="plotly_dark", height=400, yaxis_range=[0,100], paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(rfig, use_container_width=True)
 
-            with st.expander("💡 Analyst Insight: Momentum & Volatility", expanded=True):
-                if rsi_val > 70:
-                    rsi_msg = "⚠️ **Overbought (>70):** The asset may be overvalued and due for a correction."
-                elif rsi_val < 30:
-                    rsi_msg = "✅ **Oversold (<30):** The asset may be undervalued and due for a bounce."
+            with st.expander("💡 Analyst Insight: Momentum", expanded=True):
+                if pd.isna(last_rsi):
+                    st.info("⚠️ Calculating Momentum... (Insufficient history)")
                 else:
-                    rsi_msg = "ℹ️ **Neutral (30-70):** The asset is in a healthy trading range."
-                
-                vol_msg = "High Risk/Reward" if volatility > 30 else "Stable/Low Volatility"
-                st.markdown(f"""
-                **Relative Strength Index (RSI):** {rsi_msg}
-                <br>
-                **Annualized Volatility:** **{volatility:.2f}%** ({vol_msg}).
-                """, unsafe_allow_html=True)
+                    if last_rsi > 70: rsi_msg = "⚠️ **Overbought (>70):** Potential pullback."
+                    elif last_rsi < 30: rsi_msg = "✅ **Oversold (<30):** Potential bounce."
+                    else: rsi_msg = "ℹ️ **Neutral (30-70):** Healthy range."
+                    st.markdown(f"**RSI Status:** {rsi_msg}")
 
-        # TAB 3: COMPARISON
+        # TAB 3
         with tab3:
-            if df2 is not None:
-                df1['Return'] = (df1['Close'] / df1['Close'].iloc[0] - 1) * 100
-                df2['Return'] = (df2['Close'] / df2['Close'].iloc[0] - 1) * 100
-                
-                comp_fig = go.Figure()
-                comp_fig.add_trace(go.Scatter(x=df1.index, y=df1['Return'], name=ticker, line=dict(color='#64ffda', width=2)))
-                comp_fig.add_trace(go.Scatter(x=df2.index, y=df2['Return'], name=comp_ticker, line=dict(color='#ff0055', width=2)))
-                comp_fig.update_layout(title=f"Cumulative Return (%)", yaxis_title="Return (%)", template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                st.plotly_chart(comp_fig, use_container_width=True)
-                
-                common = df1.index.intersection(df2.index)
-                corr = df1['Close'][common].corr(df2['Close'][common])
-                
-                with st.expander("💡 Analyst Insight: Correlation Analysis", expanded=True):
-                    corr_strength = "Strong Positive" if corr > 0.7 else "Weak/Uncorrelated" if corr > -0.5 else "Inverse"
-                    st.markdown(f"""
-                    **Correlation Coefficient: {corr:.2f}** ({corr_strength})
-                    * **1.0:** Assets move perfectly together.
-                    * **0.0:** Assets are unrelated.
-                    """)
+            if raw_df2 is not None:
+                common_idx = df1.index.intersection(raw_df2.index)
+                common_idx = common_idx[common_idx >= view_start1]
+                if not common_idx.empty:
+                    base1 = df1.loc[common_idx[0], 'Close']
+                    base2 = raw_df2.loc[common_idx[0], 'Close']
+                    norm1 = (df1.loc[common_idx, 'Close'] / base1 - 1) * 100
+                    norm2 = (raw_df2.loc[common_idx, 'Close'] / base2 - 1) * 100
+                    
+                    comp_fig = go.Figure()
+                    comp_fig.add_trace(go.Scatter(x=common_idx, y=norm1, name=ticker, line=dict(color='#64ffda', width=2)))
+                    comp_fig.add_trace(go.Scatter(x=common_idx, y=norm2, name=comp_ticker, line=dict(color='#ff0055', width=2)))
+                    comp_fig.update_layout(title="Relative Performance (%)", template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(comp_fig, use_container_width=True)
+                    
+                    corr = df1.loc[common_idx, 'Close'].corr(raw_df2.loc[common_idx, 'Close'])
+                    with st.expander("💡 Correlation", expanded=True):
+                        st.markdown(f"**Correlation Coefficient: {corr:.2f}**")
+                else:
+                    st.warning("No overlapping data found.")
             else:
-                st.info("Enter a comparison ticker in the sidebar.")
+                st.info("Enter comparison ticker in sidebar.")
 
-        # TAB 4: AI FORECAST
+        # TAB 4
         with tab4:
             st.subheader(f"AI Trend Projection: {ticker}")
-            df1['Numbers'] = list(range(0, len(df1)))
-            X = np.array(df1['Numbers'])
-            y = np.array(df1['Close'])
-            z = np.polyfit(X, y, 1)
-            p = np.poly1d(z)
-            
-            future_days = 30
-            last_x = X[-1]
-            future_X = np.arange(last_x, last_x + future_days)
-            future_dates = [df1.index[-1] + timedelta(days=i) for i in range(1, future_days + 1)]
-            forecast_y = p(future_X)
-
-            ffig = go.Figure()
-            ffig.add_trace(go.Scatter(x=df1.index, y=df1['Close'], name='Historical', line=dict(color='#8892b0', width=1)))
-            ffig.add_trace(go.Scatter(x=future_dates, y=forecast_y, name='AI Forecast', line=dict(color='#ff0055', width=3, dash='dot')))
-            ffig.update_layout(template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(ffig, use_container_width=True)
-            
-            slope = z[0]
-            trend_msg = "UPWARD 📈" if slope > 0 else "DOWNWARD 📉"
-            with st.expander("💡 Analyst Insight: Predictive Model", expanded=True):
-                st.markdown(f"""
-                Based on a Linear Regression analysis, the trend is **{trend_msg}**.
-                * **Model Slope:** {slope:.4f} (Daily price change average)
-                """)
+            if len(view_df1) > 10: # Ensure enough points for regression
+                view_df1['Num'] = range(len(view_df1))
+                X = np.array(view_df1['Num'])
+                y = np.array(view_df1['Close'])
+                z = np.polyfit(X, y, 1)
+                p = np.poly1d(z)
+                
+                future_days = 30
+                last_x = X[-1]
+                future_X = np.arange(last_x, last_x + future_days)
+                future_dates = [view_df1.index[-1] + timedelta(days=i) for i in range(1, future_days + 1)]
+                
+                ffig = go.Figure()
+                ffig.add_trace(go.Scatter(x=view_df1.index, y=view_df1['Close'], name='History', line=dict(color='#8892b0', width=1)))
+                ffig.add_trace(go.Scatter(x=future_dates, y=p(future_X), name='Forecast', line=dict(color='#ff0055', width=3, dash='dot')))
+                ffig.update_layout(title="Linear Regression Trend", template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(ffig, use_container_width=True)
+                
+                with st.expander("💡 Predictive Model", expanded=True):
+                    slope = z[0]
+                    trend = "UPWARD" if slope > 0 else "DOWNWARD"
+                    st.markdown(f"Linear Regression indicates an **{trend}** trajectory.")
+            else:
+                st.warning("Not enough data points for AI prediction.")
 
     except Exception as e:
-        st.error(f"Calculation Error: {e}")
+        st.error(f"Error: {e}")
 
 else:
-    st.warning(f"No data found for {ticker}")
+    st.warning("Data not found.")
 
-# === FOOTER DISCLAIMER ===
 st.markdown("---")
-st.markdown("""
-<div class="disclaimer">
-    <strong>⚠️ LEGAL DISCLAIMER</strong><br>
-    This dashboard is for <strong>educational and research purposes only</strong>. 
-    The forecasts and indicators are generated by mathematical models and do not constitute financial advice. 
-    Past performance is not indicative of future results. Trade at your own risk.
-</div>
-""", unsafe_allow_html=True)
+st.markdown('<div class="disclaimer">⚠️ <strong>LEGAL DISCLAIMER:</strong> Educational purposes only. Not financial advice.</div>', unsafe_allow_html=True)
