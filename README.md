@@ -15,6 +15,9 @@ to bridge Financial Analysis with Data Engineering.
 - Plotly (Data Visualization)
 
 ## Live Demo
+**[Click Here for the live demo](https://tradeview-lusho.streamlit.app/)**
+
+**_Tip: Cmd ⌘ + Click (macOS) or Ctrl + Click (Windows/Linux) to open in a new tab._**
 
 =================================== **Developer** =================================
 
