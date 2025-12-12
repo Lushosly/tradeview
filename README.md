@@ -3,7 +3,7 @@
 to bridge Financial Analysis with Data Engineering.
 
 ## Key Features
-- Real-Time Data: Fetches live market data using the yfinance **API**.
+- Real-Time Data: Fetches live market data using the yfinance API.
 - Interactive Visuals: Uses Plotly to render zoomable candlestick charts.
 - Technical Analysis: Uses Pandas to calculate rolling avarages (SMA) and annualized volatility.
 - Data Export: Allows analysts to download processed datasets as CSV.
