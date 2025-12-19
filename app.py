@@ -294,7 +294,7 @@ if raw_df1 is not None and not raw_df1.empty:
 else:
     st.warning("Data not found.")
 
-# === FOOTER DISCLAIMER (Full Version) ===
+# === FOOTER DISCLAIMER ===
 st.markdown("---")
 st.markdown("""
 <div class="disclaimer">
